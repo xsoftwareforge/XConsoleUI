@@ -1,0 +1,130 @@
+package com.xsoftwareforge.xconsoleui.list;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
+import com.xsoftwareforge.xconsoleui.menu.MenuContext;
+
+/**
+ * High-level interactive list of {@code T} rows: cursor selection, type-ahead
+ * filtering, and per-row function-key actions. The canonical use is an admin list
+ * such as "list sockets" where each row can be acted on (kick, inspect, ...).
+ * <p>
+ * The row data is read from a {@link Supplier} on every redraw, so changes made
+ * by a row action (e.g. removing an entry) are reflected immediately.
+ *
+ * @param <T> the row element type
+ */
+public final class RowBrowser<T> {
+
+    private final String title;
+    private final Supplier<List<T>> source;
+    private final Function<T, String> renderer;
+    private final Map<FunctionKey, RowAction<T>> actions = new LinkedHashMap<>();
+    private boolean filterable = true;
+    private RowAction.Handler<T> onSelect;
+
+    private RowBrowser(String title, Supplier<List<T>> source, Function<T, String> renderer) {
+        this.title = Objects.requireNonNull(title, "title");
+        this.source = Objects.requireNonNull(source, "source");
+        this.renderer = Objects.requireNonNull(renderer, "renderer");
+    }
+
+    public static <T> RowBrowser<T> create(String title, List<T> items, Function<T, String> renderer) {
+        List<T> snapshot = List.copyOf(items);
+        return new RowBrowser<>(title, () -> snapshot, renderer);
+    }
+
+    /** Use a live supplier so row actions that mutate the data show up on redraw. */
+    public static <T> RowBrowser<T> create(String title, Supplier<List<T>> source, Function<T, String> renderer) {
+        return new RowBrowser<>(title, source, renderer);
+    }
+
+    public RowBrowser<T> filterable(boolean filterable) {
+        this.filterable = filterable;
+        return this;
+    }
+
+    public RowBrowser<T> action(FunctionKey key, String label, RowAction.Handler<T> handler) {
+        actions.put(key, new RowAction<>(key, label, handler));
+        return this;
+    }
+
+    /** Action run when Enter is pressed on a row (instead of returning from {@link #open}). */
+    public RowBrowser<T> onSelect(RowAction.Handler<T> handler) {
+        this.onSelect = handler;
+        return this;
+    }
+
+    /**
+     * Open the browser and loop until the user goes back (Esc). Row actions run in
+     * place; if an {@link #onSelect} handler is set, Enter runs it, otherwise Enter
+     * closes the browser.
+     */
+    public void open(MenuContext context) throws Exception {
+        Map<FunctionKey, String> hints = hints();
+        while (true) {
+            List<T> items = source.get();
+            BrowseResult result = context.browse(title, render(items), hints, filterable);
+            switch (result.kind()) {
+            case BACK -> {
+                return;
+            }
+            case SELECT -> {
+                if (onSelect == null) {
+                    return;
+                }
+                if (inRange(items, result.index())) {
+                    onSelect.run(context, items.get(result.index()));
+                }
+            }
+            case ACTION -> {
+                RowAction<T> action = actions.get(result.actionKey());
+                if (action != null && inRange(items, result.index())) {
+                    action.handler().run(context, items.get(result.index()));
+                }
+            }
+            }
+        }
+    }
+
+    /**
+     * Open the browser purely as a picker: returns the chosen element, or empty if
+     * the user went back. Row actions are ignored for picking.
+     */
+    public Optional<T> pick(MenuContext context) throws Exception {
+        List<T> items = source.get();
+        BrowseResult result = context.browse(title, render(items), Map.of(), filterable);
+        if (result.kind() == BrowseResult.Kind.SELECT && inRange(items, result.index())) {
+            return Optional.of(items.get(result.index()));
+        }
+        return Optional.empty();
+    }
+
+    private List<String> render(List<T> items) {
+        List<String> rows = new java.util.ArrayList<>(items.size());
+        for (T item : items) {
+            rows.add(renderer.apply(item));
+        }
+        return rows;
+    }
+
+    private Map<FunctionKey, String> hints() {
+        Map<FunctionKey, String> hints = new LinkedHashMap<>();
+        for (RowAction<T> action : actions.values()) {
+            hints.put(action.key(), action.label());
+        }
+        return hints;
+    }
+
+    private static boolean inRange(List<?> items, int index) {
+        return index >= 0 && index < items.size();
+    }
+}
