@@ -82,13 +82,17 @@ public final class RowBrowser<T> {
                     return;
                 }
                 if (inRange(items, result.index())) {
-                    onSelect.run(context, items.get(result.index()));
+                    T item = items.get(result.index());
+                    RowAction.runReported(context, title, renderer.apply(item), null, "Select",
+                            () -> onSelect.run(context, item));
                 }
             }
             case ACTION -> {
                 RowAction<T> action = actions.get(result.actionKey());
                 if (action != null && inRange(items, result.index())) {
-                    action.handler().run(context, items.get(result.index()));
+                    T item = items.get(result.index());
+                    RowAction.runReported(context, title, renderer.apply(item), action.key(), action.label(),
+                            () -> action.handler().run(context, item));
                 }
             }
             }

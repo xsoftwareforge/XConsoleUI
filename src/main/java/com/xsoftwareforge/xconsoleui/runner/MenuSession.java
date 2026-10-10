@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import org.jline.reader.EndOfFileException;
@@ -29,6 +30,7 @@ import com.xsoftwareforge.xconsoleui.menu.MenuAction;
 import com.xsoftwareforge.xconsoleui.menu.MenuContext;
 import com.xsoftwareforge.xconsoleui.menu.MenuItem;
 import com.xsoftwareforge.xconsoleui.menu.MenuRegistry;
+import com.xsoftwareforge.xconsoleui.menu.RowActionEvent;
 import com.xsoftwareforge.xconsoleui.menu.TableCellResult;
 import com.xsoftwareforge.xconsoleui.output.ConsoleOutputCoordinator;
 import com.xsoftwareforge.xconsoleui.output.SessionState;
@@ -64,6 +66,11 @@ public final class MenuSession implements MenuContext {
     /** Receives the full throwable when an action fails; defaults to a no-op. */
     private volatile Consumer<Throwable> errorHandler = ex -> {
     };
+
+    /** Optional observers (audit hooks); {@code null} when not registered. */
+    private volatile BiConsumer<String, Throwable> actionObserver;
+    private volatile Consumer<RowActionEvent> rowActionObserver;
+    private volatile BiConsumer<String, String> inputObserver;
 
     private volatile boolean running;
 
@@ -102,6 +109,45 @@ public final class MenuSession implements MenuContext {
     public MenuSession onActionError(Consumer<Throwable> handler) {
         this.errorHandler = handler == null ? ex -> {
         } : handler;
+        return this;
+    }
+
+    /**
+     * Register an observer called after every menu item or hotkey action returns,
+     * with the item/hotkey label and the thrown exception ({@code null} on success).
+     * Errors the observer throws are swallowed. {@code null} removes it.
+     *
+     * @return this session, for chaining
+     */
+    public MenuSession onActionComplete(BiConsumer<String, Throwable> observer) {
+        this.actionObserver = observer;
+        return this;
+    }
+
+    /**
+     * Register an observer called each time a row action, Enter handler or cell edit
+     * of a {@code RowBrowser}/{@code TableBrowser} returns, while the browser stays
+     * open. Errors the observer throws are swallowed. {@code null} removes it.
+     *
+     * @return this session, for chaining
+     */
+    public MenuSession onRowAction(Consumer<RowActionEvent> observer) {
+        this.rowActionObserver = observer;
+        return this;
+    }
+
+    /**
+     * Register an observer called after every prompt with its title and answer:
+     * the entered text for {@code input} ({@code null} on Esc), {@code "***"} for
+     * {@code inputMasked} (never the plain text), {@code "true"}/{@code "false"} for
+     * {@code confirm}, the chosen id(s) for {@code select}/{@code selectMultiple}
+     * (comma-joined; {@code null} on Esc). Errors the observer throws are swallowed.
+     * {@code null} removes it.
+     *
+     * @return this session, for chaining
+     */
+    public MenuSession onInput(BiConsumer<String, String> observer) {
+        this.inputObserver = observer;
         return this;
     }
 
@@ -150,7 +196,7 @@ public final class MenuSession implements MenuContext {
             if (choice.isHotkey()) {
                 MenuAction action = actions.get(choice.hotkey());
                 if (action != null) {
-                    runAction(action);
+                    runAction(hints.get(choice.hotkey()), action);
                 }
                 continue;
             }
@@ -162,7 +208,7 @@ public final class MenuSession implements MenuContext {
             if (chosen.isSubmenu()) {
                 openMenu(chosen.submenu());
             } else if (chosen.action() != null) {
-                runAction(chosen.action());
+                runAction(chosen.label(), chosen.action());
             }
         }
     }
@@ -187,16 +233,50 @@ public final class MenuSession implements MenuContext {
         }
     }
 
-    private void runAction(com.xsoftwareforge.xconsoleui.menu.MenuAction action) throws Exception {
+    private void runAction(String label, MenuAction action) throws Exception {
+        Throwable failure = null;
         try {
             action.run(this);
-        } catch (UserInterruptException | EndOfFileException ex) {
+        } catch (UserInterruptException | EndOfFileException | Error ex) {
+            failure = ex;
             throw ex;
         } catch (Exception ex) {
+            failure = ex;
             // Show a concise message to the user, but hand the full throwable (with
             // stack trace) to the host's error handler so failures can be logged.
             printError(ex.getMessage() == null ? ex.toString() : ex.getMessage());
             notifyErrorHandler(ex);
+        } finally {
+            BiConsumer<String, Throwable> observer = actionObserver;
+            if (observer != null) {
+                Throwable outcome = failure;
+                notifyObserver(() -> observer.accept(label, outcome));
+            }
+        }
+    }
+
+    @Override
+    public void rowActionCompleted(RowActionEvent event) {
+        Consumer<RowActionEvent> observer = rowActionObserver;
+        if (observer != null) {
+            notifyObserver(() -> observer.accept(event));
+        }
+    }
+
+    private <T> T reportInput(String title, T answer, String reported) {
+        BiConsumer<String, String> observer = inputObserver;
+        if (observer != null) {
+            notifyObserver(() -> observer.accept(title, reported));
+        }
+        return answer;
+    }
+
+    /** Like {@link #notifyErrorHandler}: an observer must never break the menu loop. */
+    private static void notifyObserver(Runnable call) {
+        try {
+            call.run();
+        } catch (RuntimeException ignored) {
+            // Swallowed on purpose.
         }
     }
 
@@ -286,12 +366,14 @@ public final class MenuSession implements MenuContext {
 
     @Override
     public String input(String title, String defaultValue) throws Exception {
-        return runInteraction(SessionState.WIZARD, () -> screen.input(title, defaultValue, null));
+        String value = runInteraction(SessionState.WIZARD, () -> screen.input(title, defaultValue, null));
+        return reportInput(title, value, value);
     }
 
     @Override
     public String inputMasked(String title) throws Exception {
-        return runInteraction(SessionState.WIZARD, () -> screen.input(title, null, '*'));
+        String value = runInteraction(SessionState.WIZARD, () -> screen.input(title, null, '*'));
+        return reportInput(title, value, value == null ? null : "***");
     }
 
     @Override
@@ -301,13 +383,15 @@ public final class MenuSession implements MenuContext {
 
     @Override
     public boolean confirm(String title, boolean defaultValue) throws Exception {
-        return runInteraction(SessionState.WIZARD, () -> screen.confirm(title, defaultValue));
+        boolean value = runInteraction(SessionState.WIZARD, () -> screen.confirm(title, defaultValue));
+        return reportInput(title, value, String.valueOf(value));
     }
 
     @Override
     public String select(String title, List<MenuItem> options) throws Exception {
         // Empty lists are handled by the screen (placeholder), e.g. an empty root menu.
-        return runInteraction(SessionState.MENU, () -> screen.select(title, options));
+        String id = runInteraction(SessionState.MENU, () -> screen.select(title, options));
+        return reportInput(title, id, id);
     }
 
     @Override
@@ -316,7 +400,8 @@ public final class MenuSession implements MenuContext {
         if (options == null || options.isEmpty()) {
             return List.of();
         }
-        return runInteraction(SessionState.MENU, () -> screen.selectMultiple(title, options, preselected));
+        List<String> ids = runInteraction(SessionState.MENU, () -> screen.selectMultiple(title, options, preselected));
+        return reportInput(title, ids, ids == null ? null : String.join(",", ids));
     }
 
     @Override

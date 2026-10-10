@@ -95,13 +95,17 @@ public final class TableBrowser<T> {
                     return;
                 }
                 if (inRange(items, result.index())) {
-                    onSelect.run(context, items.get(result.index()));
+                    T item = items.get(result.index());
+                    RowAction.runReported(context, title, rowKey(item), null, "Select",
+                            () -> onSelect.run(context, item));
                 }
             }
             case ACTION -> {
                 RowAction<T> action = actions.get(result.actionKey());
                 if (action != null && inRange(items, result.index())) {
-                    action.handler().run(context, items.get(result.index()));
+                    T item = items.get(result.index());
+                    RowAction.runReported(context, title, rowKey(item), action.key(), action.label(),
+                            () -> action.handler().run(context, item));
                 }
             }
             }
@@ -121,7 +125,9 @@ public final class TableBrowser<T> {
             case ACTION -> {
                 RowAction<T> action = actions.get(result.actionKey());
                 if (action != null && inRange(items, result.row())) {
-                    action.handler().run(context, items.get(result.row()));
+                    T item = items.get(result.row());
+                    RowAction.runReported(context, title, rowKey(item), action.key(), action.label(),
+                            () -> action.handler().run(context, item));
                 }
             }
             case SELECT -> {
@@ -130,9 +136,12 @@ public final class TableBrowser<T> {
                 }
                 T item = items.get(result.row());
                 if (result.isCell() && result.col() < columns.size() && columns.get(result.col()).isEditable()) {
-                    columns.get(result.col()).editor().edit(context, item);
+                    TableColumnDef<T> column = columns.get(result.col());
+                    RowAction.runReported(context, title, rowKey(item), null, "Edit " + column.name(),
+                            () -> column.editor().edit(context, item));
                 } else if (onSelect != null) {
-                    onSelect.run(context, item);
+                    RowAction.runReported(context, title, rowKey(item), null, "Select",
+                            () -> onSelect.run(context, item));
                 } else if (!result.isCell()) {
                     return; // row selected, nothing to do
                 }
@@ -175,6 +184,11 @@ public final class TableBrowser<T> {
             builder.row(cells);
         }
         return builder.build();
+    }
+
+    /** The row's first cell, used as its key when reporting row actions. */
+    private String rowKey(T item) {
+        return columns.isEmpty() ? "" : columns.get(0).cell(item);
     }
 
     private Map<FunctionKey, String> hints() {

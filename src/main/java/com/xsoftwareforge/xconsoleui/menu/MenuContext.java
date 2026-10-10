@@ -107,6 +107,14 @@ public interface MenuContext {
     TableCellResult browseTableCells(String title, Table table, Map<FunctionKey, String> rowActions,
             boolean filterable, CellBrowseState state) throws Exception;
 
+    /**
+     * Called by {@code RowBrowser}/{@code TableBrowser} each time a row action,
+     * Enter handler or cell edit returns, so the session can report it while the
+     * browser stays open. The default does nothing.
+     */
+    default void rowActionCompleted(RowActionEvent event) {
+    }
+
     /** @return whether the owning menu session is still running. */
     boolean isRunning();
 
