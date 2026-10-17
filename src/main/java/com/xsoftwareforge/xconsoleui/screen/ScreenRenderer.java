@@ -259,34 +259,57 @@ final class ScreenRenderer {
         return builder.toAttributedString();
     }
 
+    /** Width of the {@code "[x] "} mark column of a multi-select browser. */
+    static final int MARK_WIDTH = 4;
+
+    /**
+     * @param marked marked original row indices of a multi-select browser, or {@code null}
+     *               for a plain browser (no mark column)
+     */
     void renderBrowse(String title, List<String> head, List<String> rows, List<Integer> filtered,
             int selected, int scroll, int visibleRows, String filter, boolean filterable,
-            Map<FunctionKey, String> actions) {
+            Map<FunctionKey, String> actions, Set<Integer> marked) {
+        boolean multi = marked != null;
         clear();
         terminal.writer().println(styleTitle(title).toAnsi(terminal));
         terminal.writer().println(styleHint("Arrows navigate, Enter select, "
-                + (filterable ? "type to filter, " : "") + "Esc back.").toAnsi(terminal));
+                + (multi ? "Space mark, Ctrl+A mark all, " : "")
+                + (filterable ? "type to filter, " : "") + "Esc " + (multi ? "unmark/back." : "back."))
+                .toAnsi(terminal));
         if (!actions.isEmpty()) {
             terminal.writer().println(styleHotkeys(formatHotkeys(actions)).toAnsi(terminal));
         }
         if (filterable) {
             terminal.writer().println(styleHint("Filter: " + filter + "_").toAnsi(terminal));
         }
+        String headIndent = multi ? " ".repeat(MARK_WIDTH) : "";
         for (String line : head) {
-            terminal.writer().println(styleTableHeader(line).toAnsi(terminal));
+            terminal.writer().println(styleTableHeader(headIndent + line).toAnsi(terminal));
         }
         terminal.writer().println();
         int end = Math.min(filtered.size(), scroll + visibleRows);
         for (int i = scroll; i < end; i++) {
-            String line = rows.get(filtered.get(i));
-            terminal.writer().println((i == selected ? styleSelected("> " + line) : styleOption("  " + line))
-                    .toAnsi(terminal));
+            int index = filtered.get(i);
+            boolean isMarked = multi && marked.contains(index);
+            String line = (multi ? (isMarked ? "[x] " : "[ ] ") : "") + rows.get(index);
+            AttributedString styled;
+            if (i == selected) {
+                styled = styleSelected("> " + line);
+            } else if (isMarked) {
+                styled = styleHotkeys("  " + line); // marked rows stand out in the theme's hotkey colour
+            } else {
+                styled = styleOption("  " + line);
+            }
+            terminal.writer().println(styled.toAnsi(terminal));
         }
         terminal.writer().println();
         String footer = filtered.isEmpty()
                 ? "No matches"
                 : "Item " + (selected + 1) + " of " + filtered.size()
                         + (filtered.size() != rows.size() ? " (of " + rows.size() + ")" : "");
+        if (multi) {
+            footer += "  -  " + marked.size() + " markiert";
+        }
         terminal.writer().println(styleFooter(footer).toAnsi(terminal));
         terminal.writer().flush();
     }

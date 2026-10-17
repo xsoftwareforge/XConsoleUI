@@ -101,6 +101,30 @@ public interface MenuContext {
             throws Exception;
 
     /**
+     * Multi-select variant of {@link #browse(String, List, Map, boolean)}: Space marks
+     * the cursor row, Ctrl+A marks all visible rows, Esc clears marks first. Cursor,
+     * filter and marks are read from and written back to {@code state}. The default
+     * ignores {@code state} (no marking) for contexts written against 1.0.
+     *
+     * @since 1.1.0
+     */
+    default BrowseResult browse(String title, List<String> rows, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) throws Exception {
+        return browse(title, rows, rowActions, filterable);
+    }
+
+    /**
+     * Multi-select variant of {@link #browseTable(String, Table, Map, boolean)}; see
+     * {@link #browse(String, List, Map, boolean, BrowseState)}.
+     *
+     * @since 1.1.0
+     */
+    default BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) throws Exception {
+        return browseTable(title, table, rowActions, filterable);
+    }
+
+    /**
      * Cell-capable selectable table: Tab toggles row/cell mode, Left/Right pick a
      * cell. Typically used through the higher-level {@code TableBrowser}.
      */

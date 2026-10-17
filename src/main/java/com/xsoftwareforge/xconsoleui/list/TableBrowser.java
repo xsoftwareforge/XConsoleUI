@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.BrowseState;
 import com.xsoftwareforge.xconsoleui.menu.CellBrowseState;
 import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
 import com.xsoftwareforge.xconsoleui.menu.MenuContext;
@@ -20,6 +21,11 @@ import com.xsoftwareforge.xconsoleui.table.TableBuilder;
  * A selectable, typed table: like {@link RowBrowser} but rows are laid out into
  * auto-sized columns with a pinned header. Cursor selection, type-ahead filtering
  * (across the rendered row text), and per-row function-key actions.
+ * <p>
+ * {@link #multiSelect(boolean)} and {@link #batchAction} work as in
+ * {@link RowBrowser} (a {@code [x]} column is prepended). Marking is available in
+ * row mode only: in cell mode (editable columns / {@link #cellSelectable}) batch
+ * actions receive just the cursor row.
  *
  * @param <T> the row element type
  */
@@ -31,6 +37,7 @@ public final class TableBrowser<T> {
     private final Map<FunctionKey, RowAction<T>> actions = new LinkedHashMap<>();
     private boolean filterable = true;
     private boolean cellSelectable;
+    private boolean multiSelect;
     private RowAction.Handler<T> onSelect;
 
     private TableBrowser(String title, Supplier<List<T>> source) {
@@ -72,6 +79,18 @@ public final class TableBrowser<T> {
         return this;
     }
 
+    /** See {@link RowBrowser#multiSelect(boolean)}; row mode only. @since 1.1.0 */
+    public TableBrowser<T> multiSelect(boolean multiSelect) {
+        this.multiSelect = multiSelect;
+        return this;
+    }
+
+    /** See {@link RowBrowser#batchAction}. @since 1.1.0 */
+    public TableBrowser<T> batchAction(FunctionKey key, String label, RowAction.BatchHandler<T> handler) {
+        actions.put(key, RowAction.batch(key, label, handler));
+        return this;
+    }
+
     public TableBrowser<T> onSelect(RowAction.Handler<T> handler) {
         this.onSelect = handler;
         return this;
@@ -83,9 +102,18 @@ public final class TableBrowser<T> {
             return;
         }
         Map<FunctionKey, String> hints = hints();
+        BrowseState state = multiSelect ? new BrowseState() : null;
+        Marks<T> marks = new Marks<>();
         while (true) {
             List<T> items = source.get();
-            BrowseResult result = context.browseTable(title, buildTable(items), hints, filterable);
+            BrowseResult result;
+            if (state == null) {
+                result = context.browseTable(title, buildTable(items), hints, filterable);
+            } else {
+                marks.toState(items, state);
+                result = context.browseTable(title, buildTable(items), hints, filterable, state);
+                marks.fromState(items, state);
+            }
             switch (result.kind()) {
             case BACK -> {
                 return;
@@ -104,8 +132,15 @@ public final class TableBrowser<T> {
                 RowAction<T> action = actions.get(result.actionKey());
                 if (action != null && inRange(items, result.index())) {
                     T item = items.get(result.index());
-                    RowAction.runReported(context, title, rowKey(item), action.key(), action.label(),
-                            () -> action.handler().run(context, item));
+                    if (action.isBatch()) {
+                        if (RowAction.runBatchReported(context, title, marks.targets(items, item), this::rowKey,
+                                action)) {
+                            marks.clear();
+                        }
+                    } else {
+                        RowAction.runReported(context, title, rowKey(item), action.key(), action.label(),
+                                () -> action.handler().run(context, item));
+                    }
                 }
             }
             }

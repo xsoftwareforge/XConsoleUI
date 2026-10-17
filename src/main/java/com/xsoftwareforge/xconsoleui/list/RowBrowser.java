@@ -9,6 +9,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.BrowseState;
 import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
 import com.xsoftwareforge.xconsoleui.menu.MenuContext;
 
@@ -19,6 +20,12 @@ import com.xsoftwareforge.xconsoleui.menu.MenuContext;
  * <p>
  * The row data is read from a {@link Supplier} on every redraw, so changes made
  * by a row action (e.g. removing an entry) are reflected immediately.
+ * <p>
+ * With {@link #multiSelect(boolean) multiSelect(true)} rows can be marked (Space,
+ * Ctrl+A for all filtered rows, Esc clears marks first) and {@link #batchAction}s
+ * receive all marked rows. Space then toggles marks instead of extending the
+ * type-ahead filter; all other characters still filter. Marks are kept per row
+ * element (by {@code equals}) and survive filter changes and redraws.
  *
  * @param <T> the row element type
  */
@@ -29,6 +36,7 @@ public final class RowBrowser<T> {
     private final Function<T, String> renderer;
     private final Map<FunctionKey, RowAction<T>> actions = new LinkedHashMap<>();
     private boolean filterable = true;
+    private boolean multiSelect;
     private RowAction.Handler<T> onSelect;
 
     private RowBrowser(String title, Supplier<List<T>> source, Function<T, String> renderer) {
@@ -57,6 +65,30 @@ public final class RowBrowser<T> {
         return this;
     }
 
+    /**
+     * Enable row marking (Space / Ctrl+A / Esc). Off by default, so a browser behaves
+     * exactly as in 1.0 unless it opts in.
+     *
+     * @since 1.1.0
+     */
+    public RowBrowser<T> multiSelect(boolean multiSelect) {
+        this.multiSelect = multiSelect;
+        return this;
+    }
+
+    /**
+     * Function-key action on the marked rows (in list order), or just the cursor row
+     * when nothing is marked. The marks are cleared once the handler returns, unless
+     * it threw or a {@link RowBatch#run} confirmation was declined. See
+     * {@link RowBatch} for a ready-made confirm/run/summary helper.
+     *
+     * @since 1.1.0
+     */
+    public RowBrowser<T> batchAction(FunctionKey key, String label, RowAction.BatchHandler<T> handler) {
+        actions.put(key, RowAction.batch(key, label, handler));
+        return this;
+    }
+
     /** Action run when Enter is pressed on a row (instead of returning from {@link #open}). */
     public RowBrowser<T> onSelect(RowAction.Handler<T> handler) {
         this.onSelect = handler;
@@ -70,9 +102,18 @@ public final class RowBrowser<T> {
      */
     public void open(MenuContext context) throws Exception {
         Map<FunctionKey, String> hints = hints();
+        BrowseState state = multiSelect ? new BrowseState() : null;
+        Marks<T> marks = new Marks<>();
         while (true) {
             List<T> items = source.get();
-            BrowseResult result = context.browse(title, render(items), hints, filterable);
+            BrowseResult result;
+            if (state == null) {
+                result = context.browse(title, render(items), hints, filterable);
+            } else {
+                marks.toState(items, state);
+                result = context.browse(title, render(items), hints, filterable, state);
+                marks.fromState(items, state);
+            }
             switch (result.kind()) {
             case BACK -> {
                 return;
@@ -91,8 +132,15 @@ public final class RowBrowser<T> {
                 RowAction<T> action = actions.get(result.actionKey());
                 if (action != null && inRange(items, result.index())) {
                     T item = items.get(result.index());
-                    RowAction.runReported(context, title, renderer.apply(item), action.key(), action.label(),
-                            () -> action.handler().run(context, item));
+                    if (action.isBatch()) {
+                        if (RowAction.runBatchReported(context, title, marks.targets(items, item), renderer,
+                                action)) {
+                            marks.clear();
+                        }
+                    } else {
+                        RowAction.runReported(context, title, renderer.apply(item), action.key(), action.label(),
+                                () -> action.handler().run(context, item));
+                    }
                 }
             }
             }

@@ -1,12 +1,17 @@
 package com.xsoftwareforge.xconsoleui.form;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.Deque;
 import java.util.List;
 
 import java.util.Map;
 
 import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.BrowseState;
+import com.xsoftwareforge.xconsoleui.menu.RowActionEvent;
 import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
 import com.xsoftwareforge.xconsoleui.menu.MenuContext;
 import com.xsoftwareforge.xconsoleui.menu.MenuItem;
@@ -26,6 +31,53 @@ public final class StubMenuContext implements MenuContext {
     final Deque<Boolean> confirmResults = new ArrayDeque<>();
     final Deque<BrowseResult> browseResults = new ArrayDeque<>();
     final Deque<TableCellResult> cellResults = new ArrayDeque<>();
+    final Deque<Set<Integer>> markResults = new ArrayDeque<>();
+    /** Marks each stateful browse call found on entry. */
+    public final List<Set<Integer>> marksSeen = new ArrayList<>();
+    public final List<String> confirmTitles = new ArrayList<>();
+    public final List<String> resultTitles = new ArrayList<>();
+    public final List<List<String>> resultLines = new ArrayList<>();
+    public final List<RowActionEvent> rowEvents = new ArrayList<>();
+
+    /** Marks the next stateful (multi-select) browse call leaves in its state, as if the user marked them. */
+    public StubMenuContext queueMarked(Integer... indices) {
+        markResults.addLast(new TreeSet<>(List.of(indices)));
+        return this;
+    }
+
+    public StubMenuContext queueConfirm(Boolean... values) {
+        for (Boolean value : values) {
+            confirmResults.addLast(value);
+        }
+        return this;
+    }
+
+    @Override
+    public BrowseResult browse(String title, List<String> rows, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) {
+        applyMarks(state);
+        return browse(title, rows, rowActions, filterable);
+    }
+
+    @Override
+    public BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) {
+        applyMarks(state);
+        return browseTable(title, table, rowActions, filterable);
+    }
+
+    private void applyMarks(BrowseState state) {
+        marksSeen.add(new TreeSet<>(state.marked()));
+        if (!markResults.isEmpty()) {
+            state.marked().clear();
+            state.marked().addAll(markResults.pollFirst());
+        }
+    }
+
+    @Override
+    public void rowActionCompleted(RowActionEvent event) {
+        rowEvents.add(event);
+    }
 
     public StubMenuContext queueCell(TableCellResult... results) {
         for (TableCellResult result : results) {
@@ -82,11 +134,13 @@ public final class StubMenuContext implements MenuContext {
 
     @Override
     public boolean confirm(String title) {
+        confirmTitles.add(title);
         return !confirmResults.isEmpty() && confirmResults.pollFirst();
     }
 
     @Override
     public boolean confirm(String title, boolean defaultValue) {
+        confirmTitles.add(title);
         return confirmResults.isEmpty() ? defaultValue : confirmResults.pollFirst();
     }
 
@@ -112,6 +166,8 @@ public final class StubMenuContext implements MenuContext {
 
     @Override
     public void showResult(String title, List<String> lines) {
+        resultTitles.add(title);
+        resultLines.add(lines);
     }
 
     @Override

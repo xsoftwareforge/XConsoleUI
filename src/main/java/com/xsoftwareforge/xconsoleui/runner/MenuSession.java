@@ -21,6 +21,7 @@ import org.jline.terminal.Terminal;
 import com.xsoftwareforge.xconsoleui.config.ListViewMode;
 import com.xsoftwareforge.xconsoleui.config.MenuConfig;
 import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.BrowseState;
 import com.xsoftwareforge.xconsoleui.menu.CellBrowseState;
 import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
 import com.xsoftwareforge.xconsoleui.menu.Hotkey;
@@ -425,6 +426,20 @@ public final class MenuSession implements MenuContext {
             boolean filterable) throws Exception {
         Map<FunctionKey, String> actions = rowActions == null ? Map.of() : rowActions;
         return runInteraction(SessionState.MENU, () -> screen.browseTable(title, table, actions, filterable));
+    }
+
+    @Override
+    public BrowseResult browse(String title, List<String> rows, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) throws Exception {
+        Map<FunctionKey, String> actions = rowActions == null ? Map.of() : rowActions;
+        return runInteraction(SessionState.MENU, () -> screen.browse(title, null, rows, actions, filterable, state));
+    }
+
+    @Override
+    public BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) throws Exception {
+        Map<FunctionKey, String> actions = rowActions == null ? Map.of() : rowActions;
+        return runInteraction(SessionState.MENU, () -> screen.browseTable(title, table, actions, filterable, state));
     }
 
     @Override

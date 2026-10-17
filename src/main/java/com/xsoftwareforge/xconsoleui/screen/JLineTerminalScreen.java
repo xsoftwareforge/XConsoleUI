@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.xsoftwareforge.xconsoleui.config.ListViewMode;
 import com.xsoftwareforge.xconsoleui.config.MenuConfig;
 import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.BrowseState;
 import com.xsoftwareforge.xconsoleui.menu.CellBrowseState;
 import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
 import com.xsoftwareforge.xconsoleui.menu.TableCellResult;
@@ -514,91 +515,141 @@ public class JLineTerminalScreen implements TerminalScreen {
     @Override
     public BrowseResult browse(String title, List<String> header, List<String> rows,
             Map<FunctionKey, String> rowActions, boolean filterable) throws Exception {
+        return browse(title, header, rows, rowActions, filterable, null);
+    }
+
+    @Override
+    public BrowseResult browse(String title, List<String> header, List<String> rows,
+            Map<FunctionKey, String> rowActions, boolean filterable, BrowseState state) throws Exception {
         List<String> allRows = rows == null ? List.of() : rows;
         List<String> head = header == null ? List.of() : header;
         Map<FunctionKey, String> actions = rowActions == null ? Map.of() : rowActions;
         return withRawScreen(reader ->
-                runRowBrowser(reader, title, () -> new BrowseContent(head, allRows), actions, filterable));
+                runRowBrowser(reader, title, () -> new BrowseContent(head, allRows), actions, filterable, state));
     }
 
     @Override
     public BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions,
             boolean filterable) throws Exception {
-        Map<FunctionKey, String> actions = rowActions == null ? Map.of() : rowActions;
-        return withRawScreen(reader -> runRowBrowser(reader, title, () -> {
-            int width = terminalWidth();
-            RenderedTable rendered = table.render(width);
-            return new BrowseContent(List.of(rendered.header(), rendered.separator()), rendered.rows());
-        }, actions, filterable));
+        return browseTable(title, table, rowActions, filterable, null);
     }
 
+    @Override
+    public BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) throws Exception {
+        Map<FunctionKey, String> actions = rowActions == null ? Map.of() : rowActions;
+        // The "[x] " mark column takes MARK_WIDTH characters off the table width.
+        int markWidth = state == null ? 0 : ScreenRenderer.MARK_WIDTH;
+        return withRawScreen(reader -> runRowBrowser(reader, title, () -> {
+            int width = Math.max(1, terminalWidth() - markWidth);
+            RenderedTable rendered = table.render(width);
+            return new BrowseContent(List.of(rendered.header(), rendered.separator()), rendered.rows());
+        }, actions, filterable, state));
+    }
+
+    /** Ctrl+A arrives as the raw control character 0x01. */
+    private static final char CTRL_A = 1;
+
+    /**
+     * Row browser loop. With a {@code state} the browser is multi-select: Space and
+     * Ctrl+A mark rows instead of extending the filter (Space therefore cannot be
+     * typed into the filter), and Esc clears marks first. Without one it behaves
+     * exactly as in 1.0.
+     */
     private BrowseResult runRowBrowser(NonBlockingReader reader, String title, BrowseContentProvider provider,
-            Map<FunctionKey, String> actions, boolean filterable) throws IOException {
-        StringBuilder filter = new StringBuilder();
+            Map<FunctionKey, String> actions, boolean filterable, BrowseState state) throws IOException {
+        boolean multi = state != null;
+        Set<Integer> marked = multi ? state.marked() : null;
+        StringBuilder filter = new StringBuilder(multi && filterable ? state.filter() : "");
+        boolean restore = multi;
         int selected = 0;
         int scroll = 0;
-        while (true) {
-            BrowseContent content = provider.get();
-            List<String> head = content.header();
-            List<String> allRows = content.rows();
-            List<Integer> filtered = filterRows(allRows, filter.toString());
-            if (selected >= filtered.size()) {
-                selected = Math.max(0, filtered.size() - 1);
-            }
-            int reserved = 5 + head.size() + (filterable ? 1 : 0) + (actions.isEmpty() ? 0 : 1);
-            int visibleRows = visibleRows(reserved);
-            scroll = clampScroll(selected, scroll, visibleRows);
-            renderer.renderBrowse(title, head, allRows, filtered, selected, scroll, visibleRows, filter.toString(),
-                    filterable, actions);
+        List<Integer> filtered = List.of();
+        try {
+            while (true) {
+                BrowseContent content = provider.get();
+                List<String> head = content.header();
+                List<String> allRows = content.rows();
+                filtered = filterRows(allRows, filter.toString());
+                if (restore) {
+                    selected = indexOfOriginal(filtered, state.row());
+                    restore = false;
+                }
+                if (selected >= filtered.size()) {
+                    selected = Math.max(0, filtered.size() - 1);
+                }
+                int reserved = 5 + head.size() + (filterable ? 1 : 0) + (actions.isEmpty() ? 0 : 1);
+                int visibleRows = visibleRows(reserved);
+                scroll = clampScroll(selected, scroll, visibleRows);
+                renderer.renderBrowse(title, head, allRows, filtered, selected, scroll, visibleRows,
+                        filter.toString(), filterable, actions, marked);
 
-            Key key = keys.readKey(reader);
-            switch (key) {
-            case UP -> selected = Math.max(0, selected - 1);
-            case DOWN -> selected = Math.min(filtered.size() - 1, selected + 1);
-            case PAGE_UP -> selected = Math.max(0, selected - visibleRows);
-            case PAGE_DOWN -> selected = Math.min(filtered.size() - 1, selected + visibleRows);
-            case HOME -> selected = 0;
-            case END -> selected = filtered.size() - 1;
-            case ENTER -> {
-                if (!filtered.isEmpty()) {
-                    return BrowseResult.select(filtered.get(selected));
+                Key key = keys.readKey(reader);
+                switch (key) {
+                case UP -> selected = Math.max(0, selected - 1);
+                case DOWN -> selected = Math.min(filtered.size() - 1, selected + 1);
+                case PAGE_UP -> selected = Math.max(0, selected - visibleRows);
+                case PAGE_DOWN -> selected = Math.min(filtered.size() - 1, selected + visibleRows);
+                case HOME -> selected = 0;
+                case END -> selected = filtered.size() - 1;
+                case ENTER -> {
+                    if (!filtered.isEmpty()) {
+                        return BrowseResult.select(filtered.get(selected));
+                    }
                 }
-            }
-            case ESCAPE -> {
-                if (filterable && filter.length() > 0) {
-                    filter.setLength(0);
-                    selected = 0;
-                } else {
-                    return BrowseResult.back();
+                case ESCAPE -> {
+                    if (multi && !marked.isEmpty()) {
+                        marked.clear();
+                    } else if (filterable && filter.length() > 0) {
+                        filter.setLength(0);
+                        selected = 0;
+                    } else {
+                        return BrowseResult.back();
+                    }
                 }
-            }
-            case BACKSPACE -> {
-                if (filterable && filter.length() > 0) {
-                    filter.deleteCharAt(filter.length() - 1);
-                    selected = 0;
-                }
-            }
-            case F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12 -> {
-                FunctionKey pressed = toFunctionKey(key);
-                if (actions.containsKey(pressed) && !filtered.isEmpty()) {
-                    return BrowseResult.action(pressed, filtered.get(selected));
-                }
-            }
-            case CHARACTER -> {
-                Character ch = keys.lastCharacter();
-                if (filterable) {
-                    if (ch != null && !Character.isISOControl(ch)) {
-                        filter.append(ch);
+                case BACKSPACE -> {
+                    if (filterable && filter.length() > 0) {
+                        filter.deleteCharAt(filter.length() - 1);
                         selected = 0;
                     }
-                } else if (keys.isQuitCharacter()) {
-                    return BrowseResult.back();
+                }
+                case F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12 -> {
+                    FunctionKey pressed = toFunctionKey(key);
+                    if (actions.containsKey(pressed) && !filtered.isEmpty()) {
+                        return BrowseResult.action(pressed, filtered.get(selected));
+                    }
+                }
+                case CHARACTER -> {
+                    Character ch = keys.lastCharacter();
+                    if (multi && ch != null && ch == ' ') {
+                        if (!filtered.isEmpty() && !marked.remove(filtered.get(selected))) {
+                            marked.add(filtered.get(selected));
+                        }
+                    } else if (multi && ch != null && ch == CTRL_A) {
+                        if (marked.containsAll(filtered)) {
+                            marked.removeAll(filtered);
+                        } else {
+                            marked.addAll(filtered);
+                        }
+                    } else if (filterable) {
+                        if (ch != null && !Character.isISOControl(ch)) {
+                            filter.append(ch);
+                            selected = 0;
+                        }
+                    } else if (keys.isQuitCharacter()) {
+                        return BrowseResult.back();
+                    }
+                }
+                case INTERRUPT -> throw new UserInterruptException("");
+                case EOF -> throw new EndOfFileException();
+                default -> {
+                }
                 }
             }
-            case INTERRUPT -> throw new UserInterruptException("");
-            case EOF -> throw new EndOfFileException();
-            default -> {
-            }
+        } finally {
+            if (multi) {
+                state.setFilter(filter.toString());
+                state.setRow(filtered.isEmpty() ? state.row() : filtered.get(selected));
             }
         }
     }

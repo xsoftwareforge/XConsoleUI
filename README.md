@@ -172,6 +172,44 @@ the bound function keys act on the highlighted row, Esc clears the filter (or go
 back). The data is read from a supplier on each redraw, so an action that removes
 a row is reflected immediately.
 
+### Multi-selection and batch actions (since 1.1.0)
+
+Opt in with `multiSelect(true)` (same on `TableBrowser`, row mode only); browsers
+without it behave exactly as before.
+
+```java
+RowBrowser.create("Asteroids", asteroids::list, Asteroid::describe)
+    .multiSelect(true)
+    .batchAction(FunctionKey.F5, "Abbauen", (ctx, rows) ->
+        RowBatch.run(ctx, "Abbauen", rows, Asteroid::name, (c, a) -> {
+            if (a.depleted()) {
+                throw new RowBatch.Skip("erschöpft");
+            }
+            service.mine(a);
+        }))
+    .open(ctx);
+```
+
+- **Space** toggles the mark on the cursor row (`[x]` column, "N markiert" in the
+  footer). In a multi-select browser Space therefore no longer types into the
+  filter; every other character still filters.
+- **Ctrl+A** marks all rows visible under the current filter, or unmarks them when
+  all are marked already. Marks belong to the row element (`equals`), so they
+  survive filter changes and redraws.
+- **Esc** clears all marks first; then, as before, the filter, then goes back.
+- A `batchAction` handler gets the marked rows in list order, or just the cursor
+  row when nothing is marked; marks are cleared after it returns (unless it threw
+  or the confirmation was declined). Plain `action(...)` handlers still get only
+  the cursor row.
+- `RowBatch.run` asks once "Für N Einträge ausführen?" (only for N > 1), runs the
+  per-item action, collects OK / skipped (`RowBatch.Skip`) / failed (exception
+  message) and shows a summary via `showResult`.
+- Observer hooks (`MenuSession.onRowAction`): a batch action is reported **once per
+  item**. With `RowBatch.run` each event carries the item's own outcome (`error`
+  `null`, the `RowBatch.Skip`, or the exception); a declined confirmation reports
+  nothing. A batch handler not using `RowBatch` reports every item with the
+  batch's overall outcome.
+
 ## Tables
 
 Build a table, let the library size the columns, and show it in a scrollable view
@@ -272,7 +310,7 @@ terminal — not all IDE consoles support raw-mode cursor input.
 mvn install
 ```
 
-Installs `com.xsoftwareforge:xconsoleui:1.0.0` into the local `.m2` repository so
+Installs `com.xsoftwareforge:xconsoleui:1.1.0` into the local `.m2` repository so
 host projects can depend on it.
 
 ## License

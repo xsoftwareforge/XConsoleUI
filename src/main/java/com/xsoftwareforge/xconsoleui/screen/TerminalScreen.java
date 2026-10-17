@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.xsoftwareforge.xconsoleui.menu.BrowseResult;
+import com.xsoftwareforge.xconsoleui.menu.BrowseState;
 import com.xsoftwareforge.xconsoleui.menu.CellBrowseState;
 import com.xsoftwareforge.xconsoleui.menu.FunctionKey;
 import com.xsoftwareforge.xconsoleui.menu.MenuItem;
@@ -84,6 +85,32 @@ public interface TerminalScreen {
      */
     BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions, boolean filterable)
             throws Exception;
+
+    /**
+     * Multi-select row browser: like {@link #browse(String, List, List, Map, boolean)}
+     * but Space toggles the mark on the cursor row (it no longer extends the filter),
+     * Ctrl+A marks all rows visible under the filter (or unmarks them when all are
+     * marked) and Esc clears all marks before it clears the filter or goes back.
+     * Cursor, filter and marks are restored from and written back to {@code state}.
+     * The default ignores {@code state} (no marking).
+     *
+     * @since 1.1.0
+     */
+    default BrowseResult browse(String title, List<String> header, List<String> rows,
+            Map<FunctionKey, String> rowActions, boolean filterable, BrowseState state) throws Exception {
+        return browse(title, header, rows, rowActions, filterable);
+    }
+
+    /**
+     * Multi-select variant of {@link #browseTable(String, Table, Map, boolean)}; see
+     * {@link #browse(String, List, List, Map, boolean, BrowseState)}.
+     *
+     * @since 1.1.0
+     */
+    default BrowseResult browseTable(String title, Table table, Map<FunctionKey, String> rowActions,
+            boolean filterable, BrowseState state) throws Exception {
+        return browseTable(title, table, rowActions, filterable);
+    }
 
     /**
      * Like {@link #browseTable} but supports a cell-selection mode: Tab toggles
